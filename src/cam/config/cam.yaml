@@ -1,0 +1,7 @@
+/cam:
+	ros__parameters:
+		usingAe: false
+		usingAutoWb: true
+		exposureTimeValue: 9999
+		sharpnessValue: 0
+		saturationValue: 0

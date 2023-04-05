@@ -1,0 +1,103 @@
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <opencv2/opencv.hpp>
+#include "MvCameraControl.h"
+
+using namespace std;
+using namespace cv;
+
+class Camera {
+public:
+    Camera() {}
+
+    int initCamera() {
+        CameraSdkInit(1);
+        CameraEnumerateDevice(&tCameraEnumList, &iCameraCounts);
+        status = CameraInit(&tCameraEnumList, -1, -1, &hCamera);
+        CameraGetCapability(hCamera, &tCapability);
+        CameraSetImageResolution(hCamera, &tCapability.pImageSizeDesc[0]); // 设置图像分辨率
+        return status;
+    }
+
+    int settingParams(bool usingAe, int exposureTimeValue, int sharpnessValue, bool usingAutoWb, int saturationValue) {
+        CameraSetAeState(hCamera, usingAe);
+        CameraSetExposureTime(hCamera, exposureTimeValue);
+        // CameraSetGain(hCamera, gainRValue, gainGValue, gainBValue);
+        CameraSetSharpness(hCamera, sharpnessValue);
+        CameraSetWbMode(hCamera, usingAutoWb);
+        CameraSetSaturation(hCamera, saturationValue);
+        return 0;
+    }
+
+    int prepareCamera() {
+        CameraGetImageBuffer(hCamera, &sFrameInfo, &pbyBuffer, 500);
+        CameraPlay(hCamera);
+        return 0;
+    }
+
+    int convertToMat() {
+        if (CameraGetImageBuffer(hCamera, &sFrameInfo, &pbyBuffer, 1000) == CAMERA_STATUS_SUCCESS) {
+            frame.create(sFrameInfo.iHeight, sFrameInfo.iWidth, CV_8UC1);
+            memcpy(frame.data, pbyBuffer, sFrameInfo.iWidth * sFrameInfo.iHeight * sizeof(unsigned char));
+            cvtColor(frame, frame, COLOR_BayerBG2RGB);
+            CameraReleaseImageBuffer(hCamera, pbyBuffer);
+        }
+        return 0;
+    }
+
+    int releaseCamera() {
+        CameraStop(hCamera);
+        CameraUnInit(hCamera);
+        destroyAllWindows();
+        return 0;
+    }
+
+    Mat getFrame() {
+        return frame;
+    }
+
+private:
+    CameraHandle hCamera;
+    tSdkCameraDevInfo tCameraEnumList;
+    int iCameraCounts;
+    tSdkFrameHead sFrameInfo;
+    BYTE *pbyBuffer;
+    tSdkCameraCapbility tCapability;
+    int status;
+    Mat frame;
+};
+
+int main(int argc, char **argv) {
+    rclcpp::init(argc, argv);
+
+    auto node = rclcpp::Node::make_shared("camera_node");
+
+    auto publisher = node->create_publisher<sensor_msgs::msg::Image>("mvs_img", 10);
+
+    Camera camera;
+
+    if (camera.initCamera() != CAMERA_STATUS_SUCCESS) {
+        cout << "INIT CAMERA ERROR!" << endl;
+        exit(0);
+    }
+
+    camera.settingParams(false, 9999, 0, true, 50);
+    camera.prepareCamera();
+    
+    while (rclcpp::ok()) {
+        camera.convertToMat();
+        Mat frame = camera.getFrame();
+
+        if (!frame.empty()) {
+            sensor_msgs::msg::Image::SharedPtr msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", frame).toImageMsg();
+            publisher->publish(*msg);
+        }
+        rclcpp::spin_some(node);
+    }
+
+    camera.releaseCamera();
+
+    rclcpp::shutdown();
+
+    return 0
+}
